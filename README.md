@@ -43,7 +43,7 @@ Check out our [Next.js deployment documentation](https://nextjs.org/docs/deploym
 ```
 npx create-next-app@14.2.5
 cd frontend
-npm i @chakra-ui/react @chakra-ui/next-js @emotion/react @emotion/styled framer-motion
+npm i @chakra-ui/react @chakra-ui/next-js @emotion/react @emotion/styled framer-motion @heroicons/react
 ```
 ## After installing Chakra UI, you need to set up the ChakraProvider 
 
