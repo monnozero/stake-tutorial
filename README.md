@@ -43,7 +43,8 @@ Check out our [Next.js deployment documentation](https://nextjs.org/docs/deploym
 ```
 npx create-next-app@14.2.5
 cd frontend
-npm i @chakra-ui/react @chakra-ui/next-js @emotion/react @emotion/styled framer-motion @heroicons/react
+npm i @chakra-ui/react @chakra-ui/next-js @emotion/react @emotion/styled framer-motion @heroicons/react @chakra-ui/icons react-toastify react-use
+npm i dedot @dedot/chaintypes@0.10.0 @polkadot/extension-inject@0.51.1
 ```
 ## After installing Chakra UI, you need to set up the ChakraProvider 
 
@@ -70,7 +71,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
-import { Providers } from "@/providers/ChakraProvider";
+import { Providers as UiProvider  } from "@/providers/ChakraProvider";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -87,7 +88,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={inter.className}>
-        <Providers>{children}</Providers>
+        <UiProvider>{children}</UiProvider>
       </body>
     </html>
   );
@@ -95,7 +96,664 @@ export default function RootLayout({
 
  ```
 
+## After you need to set up the Wallet provider
+
+- Create `Wallet.ts` from `src/wallets/Wallet.ts`
+
+```
+import { InjectedWindow } from '@polkadot/extension-inject/types';
+
+export interface WalletOptions {
+  id: string;
+  name: string;
+  logo: string;
+}
+
+abstract class Wallet<Options extends WalletOptions = WalletOptions> {
+  #options: Options;
+
+  constructor(options: Options) {
+    this.#options = options;
+  }
+
+  get id() {
+    return this.#options.id;
+  }
+
+  get name() {
+    return this.#options.name;
+  }
+
+  get logo() {
+    return this.#options.logo;
+  }
+
+  get options() {
+    return this.#options;
+  }
+
+  get version() {
+    return this.injectedProvider?.version;
+  }
+
+  get injectedWeb3() {
+    const injectedWindow = window as Window & InjectedWindow;
+
+    if (!injectedWindow.injectedWeb3) {
+      injectedWindow.injectedWeb3 = {};
+    }
+
+    return injectedWindow.injectedWeb3;
+  }
+
+  get injectedProvider() {
+    return this.injectedWeb3[this.id];
+  }
+
+  get ready() {
+    return !!this.injectedProvider;
+  }
+
+  get installed() {
+    return false;
+  }
+
+  async initialize() {
+    // To implement in subclass
+  }
+
+  async waitUntilReady() {
+    return new Promise<void>((resolve) => {
+      if (this.ready) {
+        resolve();
+        return;
+      }
+
+      const interval = setInterval(() => {
+        if (this.ready) {
+          clearInterval(interval);
+          resolve();
+        }
+      }, 10);
+    });
+  }
+}
+
+export default Wallet;
 
 
+```
 
 
+- Create `type.ts` from `src/types.ts`
+
+```
+import { ReactNode } from 'react';
+
+export interface Props {
+  className?: string;
+  children?: ReactNode;
+
+  [prop: string]: any;
+}
+
+export interface NetworkInfo {
+  id: string;
+  name: string;
+  logo: string;
+  provider: string;
+  prefix: number;
+  symbol: string;
+  decimals: number;
+  subscanUrl?: string;
+  chainSpecFileName?: string;
+  faucetUrl?: string;
+}
+
+export type KeypairType = 'ed25519' | 'sr25519' | 'ecdsa' | 'ethereum';
+
+export interface InjectedAccount {
+  address: string;
+  genesisHash?: string | null;
+  name?: string;
+  type?: KeypairType;
+}
+
+export type Pop<T extends any[]> = T extends [...infer U, any] ? U : never;
+export type Args<T> = T extends [] ? { args?: [] | undefined } : { args: T };
+export type OmitNever<T> = { [K in keyof T as T[K] extends never ? never : K]: T[K] };
+
+```
+
+- Create hook `useWallets.ts` from `src/hooks/useWallets.ts`
+
+```
+import { useState } from 'react';
+import { useEffectOnce } from 'react-use';
+import ExtensionWallet from '@/wallets/ExtensionWallet';
+import Wallet from '@/wallets/Wallet';
+
+const A_WALLETS: Wallet[] = [
+  new ExtensionWallet({
+    name: 'SubWallet',
+    id: 'subwallet-js',
+    logo: '/subwallet-logo.svg',
+    installUrl: '',
+  }),
+  new ExtensionWallet({
+    name: 'Talisman',
+    id: 'talisman',
+    logo: '/talisman-logo.svg',
+    installUrl: '',
+  }),
+  new ExtensionWallet({
+    name: 'Polkadot{.js}',
+    id: 'polkadot-js',
+    logo: '/polkadot-js-logo.svg',
+    installUrl: '',
+  }),
+];
+
+export default function useWallets(): Wallet[] {
+  const [wallets, setWallets] = useState<Wallet[]>(A_WALLETS);
+
+  useEffectOnce(() => {
+    for (let wallet of wallets) {
+      wallet
+        .initialize()
+        .then(() => {
+          setWallets([...wallets]);
+        })
+        .catch(() => {
+          // TODO: handle error here!
+        });
+    }
+  });
+
+  return wallets;
+}
+
+```
+
+- Create `WalletProvider.tsx` from `src/providers/WalletProvider.tsx`
+
+```
+'use client'
+import { createContext, useContext, useState } from 'react';
+import { toast } from 'react-toastify';
+import { useAsync, useLocalStorage } from 'react-use';
+import { Injected } from '@polkadot/extension-inject/types';
+import useWallets from '@/hooks/useWallets';
+import { InjectedAccount, Props } from '@/types';
+import Wallet from '@/wallets/Wallet';
+
+interface WalletContextProps {
+  accounts: InjectedAccount[];
+  injectedApi?: Injected;
+  enableWallet: (id: string) => void;
+  signOut: () => void;
+  availableWallets: Wallet[];
+  connectedWalletId?: string;
+  connectedWallet?: Wallet;
+  selectedAccount?: InjectedAccount;
+  setSelectedAccount: (account: InjectedAccount) => void;
+}
+
+export const WalletContext = createContext<WalletContextProps>({
+  accounts: [],
+  enableWallet: () => {},
+  signOut: () => {},
+  availableWallets: [],
+  setSelectedAccount: () => {},
+});
+
+export const useWalletContext = () => {
+  return useContext(WalletContext);
+};
+
+export default function WalletProvider({ children }: Props) {
+  const availableWallets = useWallets();
+  const [accounts, setAccounts] = useState<InjectedAccount[]>([]);
+  const [injectedApi, setInjectedApi] = useState<Injected>();
+  const [connectedWalletId, setConnectedWalletId, removeConnectedWalletId] =
+    useLocalStorage<string>('CONNECTED_WALLET');
+  const [connectedWallet, setConnectedWallet] = useState<Wallet>();
+  const [selectedAccount, setSelectedAccount, removeSelectedAccount] =
+    useLocalStorage<InjectedAccount>('SELECTED_ACCOUNT');
+
+  const getWallet = (id: string): Wallet => {
+    const targetWallet: Wallet = availableWallets.find((one) => one.id === id)!;
+    if (!targetWallet) {
+      throw new Error('Invalid Wallet ID');
+    }
+
+    return targetWallet;
+  };
+
+  useAsync(async () => {
+    if (!connectedWalletId) {
+      setConnectedWallet(undefined);
+      return;
+    }
+
+    let unsub: () => void;
+    try {
+      const targetWallet: Wallet = getWallet(connectedWalletId);
+      setConnectedWallet(targetWallet);
+
+      await targetWallet.waitUntilReady();
+
+      const injectedProvider = targetWallet.injectedProvider;
+      if (!injectedProvider?.enable) {
+        throw new Error('Wallet is not existed!');
+      }
+
+      const injectedApi = await injectedProvider.enable('Sample Dapp');
+
+      unsub = injectedApi.accounts.subscribe(setAccounts);
+
+      setInjectedApi(injectedApi);
+    } catch (e: any) {
+      toast.error(e.message);
+      setConnectedWallet(undefined);
+      removeConnectedWalletId();
+    }
+
+    return () => unsub && unsub();
+  }, [connectedWalletId]);
+
+  const enableWallet = async (walletId: string) => {
+    setConnectedWalletId(walletId);
+  };
+
+  const signOut = () => {
+    removeConnectedWalletId();
+    setInjectedApi(undefined);
+    removeSelectedAccount();
+  };
+
+  return (
+    <WalletContext.Provider
+      value={{
+        accounts,
+        enableWallet,
+        injectedApi,
+        signOut,
+        availableWallets,
+        connectedWalletId,
+        connectedWallet,
+        selectedAccount,
+        setSelectedAccount,
+      }}>
+      {children}
+    </WalletContext.Provider>
+  );
+}
+
+```
+
+ - Setup Layout `frontend/src/app/layout.tsx` use the Providers component in your layouts.
+
+ ```
+ import type { Metadata } from "next";
+import { Inter } from "next/font/google";
+import "./globals.css";
+import { Providers as UiProvider  } from "@/providers/ChakraProvider";
+import WalletProvider from "@/providers/WalletProvider";
+
+const inter = Inter({ subsets: ["latin"] });
+
+export const metadata: Metadata = {
+  title: "Create Next App",
+  description: "Generated by create next app",
+};
+
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
+  return (
+    <html lang="en">
+      <body className={inter.className}>
+        <UiProvider>
+          <WalletProvider>
+            {children}
+          </WalletProvider>
+        </UiProvider>
+      </body>
+    </html>
+  );
+}
+
+ ```
+
+Create `ApiProvider.tsx` from `src/providers/ApiProvider.tsx`
+
+```
+'use client'
+import { createContext, useContext, useEffect } from 'react';
+import { useLocalStorage } from 'react-use';
+import useApi from '@/hooks/useApi';
+import { useWalletContext } from '@/providers/WalletProvider';
+import { NetworkInfo, Props } from '@/types';
+import { SUPPORTED_NETWORKS } from '@/utils/networks';
+import { DedotClient } from 'dedot';
+
+interface ApiContextProps {
+  api?: DedotClient;
+  apiReady: boolean;
+  network: NetworkInfo;
+  setNetwork: (one: NetworkInfo) => void;
+  defaultCaller: string;
+}
+
+const DEFAULT_NETWORK = SUPPORTED_NETWORKS['pop_network'];
+const DEFAULT_CALLER = '5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY'; // Alice
+
+export const ApiContext = createContext<ApiContextProps>({
+  apiReady: false,
+  network: DEFAULT_NETWORK,
+  setNetwork: () => {},
+  defaultCaller: DEFAULT_CALLER,
+});
+
+export const useApiContext = () => {
+  return useContext(ApiContext);
+};
+
+export default function ApiProvider({ children }: Props) {
+  const { injectedApi } = useWalletContext();
+  const [network, setNetwork] = useLocalStorage<NetworkInfo>('SELECTED_NETWORK', DEFAULT_NETWORK);
+  const { ready, api } = useApi(network);
+
+  useEffect(() => {
+    api?.setSigner(injectedApi?.signer);
+   
+  }, [injectedApi, api]);
+
+  return (
+    <ApiContext.Provider
+      value={{ api, apiReady: ready, network: network!, setNetwork, defaultCaller: DEFAULT_CALLER }}>
+      {children}
+    </ApiContext.Provider>
+  );
+}
+```
+
+- Setup ApiProvider `frontend/src/app/layout.tsx` use the Providers component in your layouts.
+
+```
+import type { Metadata } from "next";
+import { Inter } from "next/font/google";
+import "./globals.css";
+import { Providers as UiProvider } from "@/providers/ChakraProvider";
+import WalletProvider from "@/providers/WalletProvider";
+import ApiProvider from "@/providers/ApiProvider";
+
+const inter = Inter({ subsets: ["latin"] });
+
+export const metadata: Metadata = {
+  title: "Create Next App",
+  description: "Generated by create next app",
+};
+
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
+  return (
+    <html lang="en">
+      <body className={inter.className}>
+        <UiProvider>
+          <WalletProvider>
+            <ApiProvider>{children}</ApiProvider>
+          </WalletProvider>
+        </UiProvider>
+      </body>
+    </html>
+  );
+}
+
+```
+
+# Connect Wallet
+
+- Create `WalletSelection.tsx` from `src/components/WalletSelection.tsx`
+
+```
+'use client'
+import {
+  Button,
+  ChakraProps,
+  MenuItem,
+  Modal,
+  ModalBody,
+  ModalCloseButton,
+  ModalContent,
+  ModalHeader,
+  ModalOverlay,
+  Stack,
+  useDisclosure,
+} from "@chakra-ui/react";
+import { useWalletContext } from "@/providers/WalletProvider";
+import Wallet from "@/wallets/Wallet";
+import { ThemingProps } from "@chakra-ui/system";
+import Image from "next/image";
+
+interface WalletButtonProps {
+  walletInfo: Wallet;
+  afterSelectWallet?: () => void;
+}
+
+const WalletButton = ({ walletInfo, afterSelectWallet }: WalletButtonProps) => {
+  const { name, id, logo, ready, installed } = walletInfo;
+  const { enableWallet } = useWalletContext();
+
+  const connectWallet = () => {
+    enableWallet(id);
+
+    afterSelectWallet && afterSelectWallet();
+  };
+
+  return (
+    <Button
+      onClick={connectWallet}
+      isLoading={installed && !ready}
+      isDisabled={!installed}
+      loadingText={name}
+      size="lg"
+      width="full"
+      justifyContent="flex-start"
+      alignItems="center"
+      gap={4}
+    >
+      {/* <Image src={logo} alt={`${name}`} width={24} height={24} /> */}
+      <span>{name}</span>
+    </Button>
+  );
+};
+
+export enum ButtonStyle {
+  BUTTON,
+  MENU_ITEM,
+}
+
+interface WalletSelectionProps {
+  buttonStyle?: ButtonStyle;
+  buttonLabel?: string;
+  buttonProps?: ChakraProps & ThemingProps<"Button">;
+}
+
+export default function WalletSelection({
+  buttonStyle = ButtonStyle.BUTTON,
+  buttonLabel = "Connect Wallet",
+  buttonProps,
+}: WalletSelectionProps) {
+  const { isOpen, onOpen, onClose } = useDisclosure();
+  const { availableWallets } = useWalletContext();
+
+  return (
+    <>
+      {buttonStyle === ButtonStyle.MENU_ITEM && (
+        <MenuItem
+          
+          onClick={onOpen}
+          {...buttonProps}
+        >
+          {buttonLabel}
+        </MenuItem>
+      )}
+      {buttonStyle === ButtonStyle.BUTTON && (
+        <Button
+          backgroundColor={"#89d7e9"}
+          rounded={"full"}
+          _hover={{
+            shadow: "md",
+            backgroundColor: "#C8F5FF",
+          }}
+          size="md"
+          variant="outline"
+          onClick={onOpen}
+          {...buttonProps}
+        >
+          {buttonLabel}
+        </Button>
+      )}
+
+      <Modal onClose={onClose} size="sm" isOpen={isOpen}>
+        <ModalOverlay />
+        <ModalContent>
+          <ModalHeader>Select Wallet to Connect</ModalHeader>
+          <ModalCloseButton />
+          <ModalBody mb={4}>
+            <Stack>
+              {availableWallets.map((one) => (
+                <WalletButton
+                  key={one.id}
+                  walletInfo={one}
+                  afterSelectWallet={onClose}
+                />
+              ))}
+            </Stack>
+          </ModalBody>
+        </ModalContent>
+      </Modal>
+    </>
+  );
+}
+```
+
+- Create `ConnectedWallet.tsx` from `src/components/ConnectedWallet.tsx`
+
+```
+import { Flex, Text } from '@chakra-ui/react';
+import React from 'react';
+import { useWalletContext } from '@/providers/WalletProvider';
+import Image from 'next/image';
+
+export default function ConnectedWallet() {
+  const { connectedWallet } = useWalletContext();
+
+  return (
+    <Flex align='center' gap={3} flex={1} justify='center' pb={2}>
+      <Image src={connectedWallet?.logo || ''} alt={connectedWallet?.name || ''} width={24} height={24}/>
+      <Text fontWeight='600' fontSize='14'>
+        {connectedWallet?.name} - v{connectedWallet?.version}
+      </Text>
+    </Flex>
+  );
+}
+
+```
+
+- Create `AccountSelection.tsx` from `src/components/AccountSelection.tsx`
+
+```
+'use client'
+import { Box, Button, Flex, Menu, MenuButton, MenuDivider, MenuItem, MenuList, Text } from '@chakra-ui/react';
+import { useEffect, useMemo } from 'react';
+import ConnectedWallet from '@/components/ConnectedWallet';
+import WalletSelection, { ButtonStyle } from '@/components/WalletSelection';
+import useBalances from '@/hooks/useBalances';
+import useDisplayAddress from '@/hooks/useDisplayAddress';
+import { useApiContext } from '@/providers/ApiProvider';
+import { useWalletContext } from '@/providers/WalletProvider';
+import { formatBalance, shortenAddress } from '@/utils/string';
+import { ChevronDownIcon } from '@chakra-ui/icons';
+import Image from 'next/image';
+
+export default function AccountSelection() {
+  const { accounts, injectedApi, selectedAccount, setSelectedAccount, signOut, connectedWallet } = useWalletContext();
+  const { network } = useApiContext();
+  const addresses = useMemo(() => accounts.map((a) => a.address), [accounts]);
+  const balances = useBalances(addresses);
+
+  const displayAddress = useDisplayAddress(selectedAccount?.address);
+
+  useEffect(() => {
+    if (selectedAccount && accounts.map((one) => one.address).includes(selectedAccount.address)) {
+      return;
+    }
+
+    setSelectedAccount(accounts[0]);
+  }, [accounts, selectedAccount, setSelectedAccount]);
+
+  if (!selectedAccount) {
+    return <></>;
+  }
+
+  const { name, address } = selectedAccount;
+
+  return (
+    <Box >
+      <Menu autoSelect={false}>
+        <MenuButton as={Button} backgroundColor={'#89d7e9'} rounded={'full'}   _hover={{
+              shadow: "md",
+              backgroundColor: "#C8F5FF",
+            }}>
+          <Flex align='center' gap={2}>
+            
+            <Text fontSize='sm' fontWeight='500' textColor={"#026262"}>
+              {shortenAddress(displayAddress)}
+            </Text>
+            <ChevronDownIcon fontSize='xl' />
+          </Flex>
+        </MenuButton>
+
+        <MenuList>
+          <ConnectedWallet />
+
+          {accounts.map((one) => (
+            <MenuItem
+              backgroundColor={one.address === address ? 'gray.200' : ''}
+              gap={2}
+              key={one.address}
+              onClick={() => setSelectedAccount(one)}>
+              <Flex direction='column'>
+                <Text fontWeight='500'>{one.name}</Text>
+
+                <Text fontSize='xs'>Address: {shortenAddress(one.address)}</Text>
+                <Text fontSize='xs'>
+                  Balance: {formatBalance(balances[one.address]?.free) || '0'} {network.symbol}
+                </Text>
+              </Flex>
+            </MenuItem>
+          ))}
+          <MenuDivider />
+          <WalletSelection
+            buttonStyle={ButtonStyle.MENU_ITEM}
+            buttonLabel='Switch Wallet'
+            buttonProps={{ color: 'primary.500' }}
+          />
+          <MenuItem onClick={signOut} color='red.500'>
+            Sign Out
+          </MenuItem>
+        </MenuList>
+      </Menu>
+    </Box>
+  );
+}
+
+```

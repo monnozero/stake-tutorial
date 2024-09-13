@@ -1,7 +1,12 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
-import { Providers } from "@/providers/ChakraProvider";
+import { Providers as UiProvider } from "@/providers/ChakraProvider";
+import WalletProvider from "@/providers/WalletProvider";
+import ApiProvider from "@/providers/ApiProvider";
+import { ToastContainer } from "react-toastify";
+import "react-toastify/dist/ReactToastify.css";
+
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -18,7 +23,14 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={inter.className}>
-        <Providers>{children}</Providers>
+        <UiProvider>
+          <WalletProvider>
+            <ApiProvider>
+              <ToastContainer />
+              {children}
+            </ApiProvider>
+          </WalletProvider>
+        </UiProvider>
       </body>
     </html>
   );
