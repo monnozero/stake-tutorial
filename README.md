@@ -518,7 +518,7 @@ export default function RootLayout({
 
 ```
 
-# Connect Wallet
+# Connect Wallet and Network
 
 - Create `WalletSelection.tsx` from `src/components/WalletSelection.tsx`
 
@@ -752,6 +752,142 @@ export default function AccountSelection() {
           </MenuItem>
         </MenuList>
       </Menu>
+    </Box>
+  );
+}
+
+```
+
+- Create `NetworkSelection.tsx` from `src/components/NetworkSelection.tsx`
+
+```
+'use client'
+import { Box, Button, Flex, Menu, MenuButton, MenuItem, MenuList, Spinner } from '@chakra-ui/react';
+import { useApiContext } from '@/providers/ApiProvider';
+import { SUPPORTED_NETWORKS } from '@/utils/networks';
+import Image from 'next/image';
+
+function NetworkStatusIndicator() {
+  const { apiReady } = useApiContext();
+
+  if (apiReady) {
+    return <Box borderRadius='50%' width={3} height={3} backgroundColor='green.500' />;
+  } else {
+    return <Spinner size='xs' />;
+  }
+}
+
+export default function NetworkSelection() {
+  const { network, setNetwork } = useApiContext();
+
+
+  return (
+    <Menu autoSelect={false} >
+      <MenuButton as={Button} flexShrink={0} backgroundColor={'#89d7e9'} rounded={'full'}   _hover={{
+              shadow: "md",
+              backgroundColor: "#C8F5FF",
+            }}>
+        <Flex direction='row' align='center' gap={2} >
+          <Image src={network.logo} alt={network.name} width={22} height={22} style={{ borderRadius: 4 }} />
+          <Box flexShrink={0}>
+            <NetworkStatusIndicator />
+          </Box>
+        </Flex>
+      </MenuButton>
+      <MenuList>
+        {Object.values(SUPPORTED_NETWORKS).map((one) => (
+          <MenuItem
+            key={one.id}
+            onClick={() => setNetwork(one)}
+            backgroundColor={one.id === network.id ? 'gray.200' : ''}>
+            <Flex direction='row' align='center' gap={2}>
+              <span>{one.name}</span>
+            </Flex>
+          </MenuItem>
+        ))}
+      </MenuList>
+    </Menu>
+  );
+}
+
+```
+- Create `MainHeader` from `src/components/MainHeader/index.tsx`
+
+`
+"use client";
+import { Box, Container, Flex, Text } from "@chakra-ui/react";
+import React from "react";
+import AccountSelection from "@/components/AccountSelection";
+
+import { useWalletContext } from "@/providers/WalletProvider";
+import NetworkSelection from "@/components/NetworkSelection";
+import WalletSelection from "@/components/WalletSelection";
+import MenuNavigate from "@/components/MainHeader/MenuNavigate";
+
+
+export default function MainHeader() {
+  const { injectedApi } = useWalletContext();
+
+  return (
+    <Box borderBottom={1} borderStyle="solid" borderColor="gray.200">
+      <Container
+        maxWidth="full"
+        px={4}
+        mx="auto"
+        display="flex"
+        justifyContent="space-between"
+        alignItems="center"
+        gap={4}
+        h={16}
+      >
+        <MenuNavigate/>
+        <Flex gap={2}>
+        <NetworkSelection />
+
+          {injectedApi ? <AccountSelection /> : <WalletSelection />}
+         
+        </Flex>
+      </Container>
+    </Box>
+  );
+}
+`
+
+
+- Add MainHeader `frontend/src/app/layout.tsx` use the `MainHeader.tsx` component in your layouts.
+```
+"use client";
+import { Box, Container, Flex, Text } from "@chakra-ui/react";
+import React from "react";
+import AccountSelection from "@/components/AccountSelection";
+import { useWalletContext } from "@/providers/WalletProvider";
+import NetworkSelection from "@/components/NetworkSelection";
+import WalletSelection from "@/components/WalletSelection";
+
+
+
+export default function MainHeader() {
+  const { injectedApi } = useWalletContext();
+
+  return (
+    <Box borderBottom={1} borderStyle="solid" borderColor="gray.200">
+      <Container
+        maxWidth="full"
+        px={4}
+        mx="auto"
+        display="flex"
+        justifyContent="space-between"
+        alignItems="center"
+        gap={4}
+        h={16}
+      >
+        <Flex gap={2}>
+        <NetworkSelection />
+
+          {injectedApi ? <AccountSelection /> : <WalletSelection />}
+         
+        </Flex>
+      </Container>
     </Box>
   );
 }
